@@ -1,0 +1,159 @@
+{
+  "realm": "llm-gateway",
+  "displayName": "LLM Gateway - Demo",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 3600,
+  "groups": [
+    { "name": "team-dev",     "attributes": { "description": ["Equipe Engineering - Copilot dev"] } },
+    { "name": "team-rh",      "attributes": { "description": ["Equipe RH - chatbot RH (donnees sensibles)"] } },
+    { "name": "team-finance", "attributes": { "description": ["Equipe Finance - reporting"] } }
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"unmanagedAttributePolicy\":\"ADMIN_VIEW\",\"attributes\":[{\"name\":\"username\",\"displayName\":\"Username\",\"validations\":{\"length\":{\"min\":3,\"max\":255},\"username-prohibited-characters\":{},\"up-username-not-idn-homograph\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"email\",\"displayName\":\"Email\",\"validations\":{\"email\":{},\"length\":{\"max\":255}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"firstName\",\"displayName\":\"First name\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"lastName\",\"displayName\":\"Last name\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"litellm_role\",\"displayName\":\"LiteLLM role\",\"validations\":{\"options\":{\"options\":[\"proxy_admin\",\"proxy_admin_viewer\",\"internal_user\",\"internal_user_viewer\"]}},\"permissions\":{\"view\":[\"admin\"],\"edit\":[\"admin\"]},\"multivalued\":false}],\"groups\":[{\"name\":\"user-metadata\",\"displayHeader\":\"User metadata\",\"displayDescription\":\"Attributes, which refer to user metadata\"}]}"
+          ]
+        }
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "admin.platform",
+      "email": "admin.platform@example.com",
+      "firstName": "Alex",
+      "lastName": "Platform",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "litellm_role": ["proxy_admin"] },
+      "credentials": [{ "type": "password", "value": "${DEMO_USERS_PASSWORD}", "temporary": false }],
+      "groups": []
+    },
+    {
+      "username": "alice.dev",
+      "email": "alice.dev@example.com",
+      "firstName": "Alice",
+      "lastName": "Martin",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "litellm_role": ["internal_user"] },
+      "credentials": [{ "type": "password", "value": "${DEMO_USERS_PASSWORD}", "temporary": false }],
+      "groups": ["/team-dev"]
+    },
+    {
+      "username": "bob.rh",
+      "email": "bob.rh@example.com",
+      "firstName": "Bob",
+      "lastName": "Durand",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "litellm_role": ["internal_user"] },
+      "credentials": [{ "type": "password", "value": "${DEMO_USERS_PASSWORD}", "temporary": false }],
+      "groups": ["/team-rh"]
+    },
+    {
+      "username": "carla.finance",
+      "email": "carla.finance@example.com",
+      "firstName": "Carla",
+      "lastName": "Leroy",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "litellm_role": ["internal_user_viewer"] },
+      "credentials": [{ "type": "password", "value": "${DEMO_USERS_PASSWORD}", "temporary": false }],
+      "groups": ["/team-finance"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "litellm-ui",
+      "name": "LiteLLM Admin UI (SSO)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${LITELLM_OIDC_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:4000/*"],
+      "webOrigins": ["http://localhost:4000"],
+      "attributes": { "post.logout.redirect.uris": "http://localhost:4000/*" },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "full.path": "false",
+            "claim.name": "groups",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "litellm_role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "litellm_role",
+            "claim.name": "litellm_role",
+            "jsonType.label": "String",
+            "multivalued": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "app-copilot-dev",
+      "name": "Application - Copilot developpeurs (machine-to-machine)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${APP_CLIENTS_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": { "litellm.team_id": "team-dev" }
+    },
+    {
+      "clientId": "app-chatbot-rh",
+      "name": "Application - Chatbot RH (machine-to-machine)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${APP_CLIENTS_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": { "litellm.team_id": "team-rh" }
+    },
+    {
+      "clientId": "app-reporting-finance",
+      "name": "Application - Reporting finance (machine-to-machine)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${APP_CLIENTS_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": { "litellm.team_id": "team-finance" }
+    }
+  ]
+}

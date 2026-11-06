@@ -1,0 +1,5 @@
+# Profil Codex : codex --profile claude  -> Claude Haiku via la gateway LiteLLM
+# À copier dans %USERPROFILE%\.codex\claude.config.toml
+model = "claude-haiku"
+model_provider = "litellm"
+model_context_window = 200000

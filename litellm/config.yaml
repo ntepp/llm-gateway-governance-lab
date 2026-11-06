@@ -1,0 +1,146 @@
+# =====================================================================
+#  LiteLLM Proxy - configuration de démo
+#  Thèmes : sécurité / gouvernance / maîtrise des coûts
+# =====================================================================
+
+model_list:
+  # --- 1. Modèle LOCAL "souverain" (Ollama) : aucune donnée ne sort --------
+  - model_name: local-qwen
+    litellm_params:
+      model: ollama_chat/qwen2.5:0.5b
+      api_base: http://ollama:11434
+    model_info:
+      description: "Modele local (on-prem) - donnees sensibles autorisees"
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+
+  # --- 2. Fournisseurs cloud : modèles les moins coûteux (nov. 2026) -------
+  #     Les clés ne sont jamais exposées aux applications : seule la gateway
+  #     les détient. Les apps n'ont qu'une virtual key LiteLLM.
+  - model_name: gpt-nano
+    litellm_params:
+      model: openai/gpt-5-nano
+      api_key: os.environ/OPENAI_DEMO_LLM_KEY
+      reasoning_effort: minimal   # modèle "reasoning" : on limite les tokens de réflexion
+      guardrails: ["pii-rgpd-cloud"]   # données personnelles filtrées avant sortie vers le cloud
+    model_info:
+      description: "OpenAI GPT-5 nano - le moins cher d'OpenAI"
+
+  - model_name: gpt-6-luna
+    litellm_params:
+      model: openai/gpt-6-luna
+      api_key: os.environ/OPENAI_DEMO_LLM_KEY
+      guardrails: ["pii-rgpd-cloud"]
+    model_info:
+      description: "OpenAI GPT-6 Luna - utilisé par Codex CLI (0,10 $ / 0,50 $ par M tokens)"
+
+  - model_name: claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-5-5
+      api_key: os.environ/ANTHROPIC_DEMO_LLM_KEY
+      guardrails: ["pii-rgpd-cloud"]
+    model_info:
+      description: "Anthropic Claude Haiku 5.5 - le moins cher d'Anthropic"
+
+  - model_name: gemini-flash-lite
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_DEMO_LLM_KEY
+      guardrails: ["pii-rgpd-cloud"]
+    model_info:
+      description: "Google Gemini 3.1 Flash-Lite - le moins cher ouvert aux nouveaux comptes (2.5 ferme)"
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 60
+  # Cache Redis : désactivé par défaut, activable par requête
+  # (header/body: {"cache": {"use-cache": true}}) pour la démo "coûts".
+  cache: true
+  cache_params:
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+    ttl: 600
+    mode: default_off
+  # Paramètres appliqués aux utilisateurs créés à la volée par le SSO
+  default_internal_user_params:
+    user_role: internal_user_viewer
+    max_budget: 2
+    budget_duration: 30d
+    models: ["gemini-flash-lite", "local-qwen"]
+
+router_settings:
+  routing_strategy: simple-shuffle
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  num_retries: 2
+  timeout: 60
+  # Résilience multi-fournisseurs : panne / quota d'un provider -> bascule
+  fallbacks:
+    - gpt-nano: ["gemini-flash-lite", "claude-haiku"]
+    - claude-haiku: ["gpt-nano"]
+    - gemini-flash-lite: ["gpt-nano"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+  # Spend logs : on trace qui / quoi / combien, mais PAS le contenu des prompts
+  store_prompts_in_spend_logs: false
+  # Mapping SSO -> équipes LiteLLM : le claim "groups" de Keycloak
+  # contient les team_id (team-dev, team-rh, team-finance)
+  litellm_jwtauth:
+    team_ids_jwt_field: groups
+
+# =====================================================================
+#  GUARDRAILS - protection des données (RGPD) et AI Act
+#  Filtre intégré à LiteLLM (regex + mots-clés), aucune dépendance externe.
+# =====================================================================
+guardrails:
+  # 1) Données personnelles : appliqué UNIQUEMENT aux modèles cloud
+  #    (attaché via litellm_params.guardrails). Le modèle local n'est pas filtré :
+  #    la donnée ne quitte pas le périmètre.
+  - guardrail_name: pii-rgpd-cloud
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: pre_call
+      patterns:
+        # --- MASK : la requête part, mais la donnée est remplacée ---
+        - { pattern_type: prebuilt, pattern_name: email,    action: MASK }
+        - { pattern_type: prebuilt, pattern_name: fr_phone, action: MASK }
+        - pattern_type: regex          # 06 12 34 56 78 / +33 6.12.34.56.78 (format réel, avec séparateurs)
+          name: fr_phone_formatted
+          pattern: '(?<![\d+])(?:(?:\+|00)33[\s.-]?[1-9]|0[1-9])(?:[\s.-]?\d{2}){4}(?!\d)'
+          action: MASK
+        # --- BLOCK : la requête est refusée (HTTP 400) ---
+        - { pattern_type: prebuilt, pattern_name: fr_nir,          action: BLOCK }
+        - pattern_type: regex          # n° de sécurité sociale avec espaces : 1 85 05 78 006 084 36
+          name: fr_nir_formatted
+          pattern: '(?<!\d)[12][\s.]?\d{2}[\s.]?(?:0[1-9]|1[0-2])[\s.]?(?:\d{2}|2[AB])[\s.]?\d{3}[\s.]?\d{3}(?:[\s.]?\d{2})?(?!\d)'
+          action: BLOCK
+        - { pattern_type: prebuilt, pattern_name: iban,            action: BLOCK }
+        - pattern_type: regex          # IBAN avec espaces : FR76 3000 6000 0112 3456 7890 189
+          name: iban_formatted
+          pattern: '\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){3,7}(?:\s?[A-Z0-9]{1,3})?\b'
+          action: BLOCK
+        - { pattern_type: prebuilt, pattern_name: credit_card,     action: BLOCK }
+        - { pattern_type: prebuilt, pattern_name: passport_france, action: BLOCK }
+        # --- Secrets techniques (fuite de credentials) ---
+        - { pattern_type: prebuilt, pattern_name: aws_access_key,  action: BLOCK }
+        - { pattern_type: prebuilt, pattern_name: github_token,    action: BLOCK }
+
+  # 2) AI Act article 5 (pratiques interdites) : GLOBAL, tous modèles y compris local
+  - guardrail_name: ai-act-art5
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: pre_call
+      default_on: true
+      categories:
+        - category: eu_ai_act_article5_prohibited_practices_fr
+          category_file: policy_templates/eu_ai_act_article5_fr.yaml
+          enabled: true
+          action: BLOCK
+        - category: eu_ai_act_article5_prohibited_practices
+          category_file: policy_templates/eu_ai_act_article5.yaml
+          enabled: true
+          action: BLOCK

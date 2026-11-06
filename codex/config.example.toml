@@ -1,0 +1,16 @@
+# Exemple : Codex CLI branché sur la gateway LiteLLM locale.
+# À copier dans %USERPROFILE%\.codex\config.toml (Windows) ou ~/.codex/config.toml.
+# La clé est une clé VIRTUELLE LiteLLM (créée par scripts/bootstrap.ps1 : app-codex-cli),
+# à placer dans la variable d'environnement LITELLM_CODEX_KEY. Aucune clé fournisseur ici.
+
+model = "gpt-6-luna"            # nom du modèle tel qu'exposé par la gateway
+model_provider = "litellm"
+model_reasoning_summary = "none"
+model_reasoning_effort = "low"
+model_context_window = 922000
+
+[model_providers.litellm]
+name = "LiteLLM Gateway (local)"
+base_url = "http://localhost:4000/v1"
+env_key = "LITELLM_CODEX_KEY"
+wire_api = "responses"

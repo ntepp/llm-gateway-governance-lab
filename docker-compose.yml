@@ -1,0 +1,144 @@
+name: llm-gateway-demo
+
+# Stack de démo "LLM Gateway : sécurité, gouvernance, coûts"
+#   - LiteLLM Proxy   http://localhost:4000      (gateway + UI admin /ui)
+#   - Keycloak        http://localhost:8080      (IdP OIDC / SSO)
+#   - PostgreSQL      (interne)                   (bases litellm + keycloak)
+#   - Redis           (interne)                   (cache + rate-limit partagé)
+#   - Ollama          (interne)                   (modèle local "souverain")
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      LITELLM_DB_PASSWORD: ${LITELLM_DB_PASSWORD}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d litellm && pg_isready -U postgres -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      # Le navigateur parle à localhost:8080, LiteLLM parle à keycloak:8080 (back-channel).
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      # Placeholders utilisés par l'import du realm
+      LITELLM_OIDC_CLIENT_SECRET: ${LITELLM_OIDC_CLIENT_SECRET}
+      DEMO_USERS_PASSWORD: ${DEMO_USERS_PASSWORD}
+      APP_CLIENTS_SECRET: ${APP_CLIENTS_SECRET}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/realm-llm-gateway.json:/opt/keycloak/data/import/realm-llm-gateway.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      # Garde le modèle en mémoire : pas de démarrage à froid (~7 s) pendant la démo
+      OLLAMA_KEEP_ALIVE: "-1"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # Job one-shot : télécharge le petit modèle local utilisé dans la démo
+  ollama-pull:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "ollama pull ${OLLAMA_MODEL:-qwen2.5:0.5b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD}@postgres:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      PROXY_BASE_URL: http://localhost:4000
+      # --- Clés fournisseurs (depuis .env ou variables d'environnement Windows) ---
+      OPENAI_DEMO_LLM_KEY: ${OPENAI_DEMO_LLM_KEY:-}
+      ANTHROPIC_DEMO_LLM_KEY: ${ANTHROPIC_DEMO_LLM_KEY:-}
+      GEMINI_DEMO_LLM_KEY: ${GEMINI_DEMO_LLM_KEY:-}
+      # --- SSO OIDC générique -> Keycloak (UI admin) ---
+      GENERIC_CLIENT_ID: litellm-ui
+      GENERIC_CLIENT_SECRET: ${LITELLM_OIDC_CLIENT_SECRET}
+      GENERIC_AUTHORIZATION_ENDPOINT: http://localhost:8080/realms/llm-gateway/protocol/openid-connect/auth
+      GENERIC_TOKEN_ENDPOINT: http://keycloak:8080/realms/llm-gateway/protocol/openid-connect/token
+      GENERIC_USERINFO_ENDPOINT: http://keycloak:8080/realms/llm-gateway/protocol/openid-connect/userinfo
+      GENERIC_SCOPE: "openid email profile"
+      GENERIC_USER_ID_ATTRIBUTE: sub
+      GENERIC_USER_EMAIL_ATTRIBUTE: email
+      GENERIC_USER_DISPLAY_NAME_ATTRIBUTE: name
+      GENERIC_USER_FIRST_NAME_ATTRIBUTE: given_name
+      GENERIC_USER_LAST_NAME_ATTRIBUTE: family_name
+      GENERIC_USER_ROLE_ATTRIBUTE: litellm_role
+      GENERIC_INCLUDE_TOKEN_CLAIMS: "true"
+      PROXY_LOGOUT_URL: http://localhost:8080/realms/llm-gateway/protocol/openid-connect/logout
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+volumes:
+  pg_data:
+  ollama_data:

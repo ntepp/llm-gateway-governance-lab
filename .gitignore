@@ -1,0 +1,13 @@
+# Secrets générés localement (scripts/setup.ps1, scripts/bootstrap.ps1)
+.env
+.env.*
+!.env.example
+.secrets/
+
+# Support de présentation et schémas animés : hors dépôt
+presentation/
+
+# Divers
+*.log
+.DS_Store
+Thumbs.db
